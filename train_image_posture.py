@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 import joblib
 import numpy as np
+from smartpos.image_features import IMAGE_FEATURE_COUNT, image_features
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -20,26 +21,6 @@ from sklearn.metrics import (
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
-IMAGE_FEATURE_COUNT = 1764
-
-
-def image_features(image):
-    """Fixed-size, contrast-normalized HOG descriptor for upper-body imagery."""
-    if image is None or image.size == 0:
-        raise ValueError('Invalid image')
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
-    gray = cv2.equalizeHist(gray)
-    hog = cv2.HOGDescriptor((64, 64), (16, 16), (8, 8), (8, 8), 9)
-    features = hog.compute(gray).reshape(-1)
-    if features.size != IMAGE_FEATURE_COUNT:
-        raise RuntimeError(
-            f'Unexpected HOG feature count: {features.size}; '
-            f'expected {IMAGE_FEATURE_COUNT}'
-        )
-    return features
-
 
 def load_dataset(root):
     X, y, groups, filenames = [], [], [], []

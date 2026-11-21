@@ -2,15 +2,17 @@
 from pathlib import Path
 import joblib
 import numpy as np
-from posture_inference import landmark_visibility
-from train_image_posture import IMAGE_FEATURE_COUNT, image_features
+from smartpos.image_features import IMAGE_FEATURE_COUNT, image_features
+from smartpos.landmarks import landmark_visibility
 
 
 class ImagePosturePredictor:
     def __init__(self, path=None):
         path = Path(path) if path else Path(__file__).with_name('image_posture_model.joblib')
         bundle = joblib.load(path)  # Only load trusted model files.
-        if bundle.get('kind') != 'hog_image_binary_v1' or bundle.get('labels') != ['BAD', 'GOOD']:
+        if (not isinstance(bundle, dict)
+                or bundle.get('kind') != 'hog_image_binary_v1'
+                or bundle.get('labels') != ['BAD', 'GOOD']):
             raise ValueError('Unsupported image posture model')
         self.pipeline = bundle['pipeline']
         classes = getattr(self.pipeline, 'classes_', None)
@@ -64,5 +66,8 @@ class ImagePosturePredictor:
                 'issue': ('UPRIGHT' if label == 'GOOD' else 'IMAGE_POSTURE') if accepted else None,
                 'confidence': confidence,
                 'raw_label': label, 'raw_category': label,
-                'rejection_reason': None if accepted else 'Low image-model confidence',
+                'rejection_reason': (
+                    None if accepted
+                    else f'Low image-model confidence ({confidence:.3f} < {threshold:.2f})'
+                ),
                 'landmark_visibility': visibility}

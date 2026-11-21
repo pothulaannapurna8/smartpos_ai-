@@ -2,8 +2,12 @@
 import logging
 import threading
 import time
-import cv2
-from .geometry import head_offset_ratio, posture_measurements
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+from .geometry import measure_posture
+from .landmarks import landmark_visibility, posture_points
 
 
 def _wrap_overlay_text(text, max_width, font_scale, thickness):
@@ -83,39 +87,71 @@ def draw_posture_overlay(frame, status, landmarks=None, pose_landmark_ids=None):
     label = status.get('label', 'unknown')
     issue = status.get('issue')
     correction = status.get('correction', '')
+    metrics = status.get('metrics', {})
+    baseline = status.get('baseline', {})
+    debug = status.get('debug', {})
     if label == 'bad':
         color = (42, 42, 220)
         lines = [
             'BAD POSTURE',
             f'Issue: {issue or "POSTURE"}',
-            f"Neck angle: {status['neck']:.1f} deg"
-            if status.get('neck') is not None else 'Neck angle: unavailable',
-            f"Shoulder tilt: {status['tilt']:.1f} deg"
-            if status.get('tilt') is not None else 'Shoulder tilt: unavailable',
         ]
-        if status.get('head_offset') is not None:
-            lines.append(f"Head offset: {status['head_offset']:+.2f} shoulder widths")
-        if status.get('probability') is not None:
-            lines.append(f"Model probability: {status['probability']:.3f}")
+    elif label == 'good':
+        color = (46, 160, 92)
+        lines = ['GOOD POSTURE']
+    else:
+        color = (108, 116, 128)
+        lines = ['Posture unavailable', correction]
+    alignment = metrics.get('head_alignment_deg')
+    tilt = metrics.get('shoulder_tilt_deg')
+    tilt_signed = metrics.get('shoulder_tilt_signed_deg')
+    tilt_baseline = baseline.get('shoulder_tilt_signed_deg')
+    if alignment is not None:
+        lines.append(
+            f'Head/shoulder image-plane deviation: {abs(alignment):.1f} deg'
+        )
+    else:
+        lines.append('Head/shoulder alignment: unavailable')
+    vertical = metrics.get('head_vertical_displacement')
+    if vertical is not None:
+        lines.append(
+            f"Vertical head shift: {vertical:.2f} "
+            f"{metrics.get('head_offset_unit', 'normalized units')}"
+        )
+    if tilt is not None:
+        delta = (
+            tilt_signed - tilt_baseline
+            if tilt_signed is not None and tilt_baseline is not None
+            else None
+        )
+        tilt_line = f'Shoulder tilt: {tilt:.1f} deg'
+        if delta is not None:
+            tilt_line += f' (baseline delta {delta:+.1f} deg)'
+        lines.append(tilt_line)
+    if metrics.get('head_offset') is not None:
+        unit = metrics.get('head_offset_unit', 'shoulder widths')
+        offset = metrics['head_offset']
+        offset_baseline = baseline.get('head_offset')
+        offset_line = f'Head shift: {offset:+.2f} {unit}'
+        if offset_baseline is not None:
+            offset_line += f' (baseline {offset_baseline:+.2f})'
+        lines.append(offset_line)
+    if metrics.get('torso_lean_deg') is not None:
+        lines.append(f"Torso lean: {metrics['torso_lean_deg']:+.1f} deg")
+    image = status.get('image_prediction', {})
+    image_label = image.get('raw_label') or image.get('status', 'UNKNOWN')
+    image_confidence = image.get('confidence')
+    image_line = f'Image AI: {image_label}'
+    if image_confidence is not None:
+        image_line += f' ({image_confidence:.2f})'
+    lines.append(image_line)
+    lines.append(f"Rule: {debug.get('rule_prediction', 'UNKNOWN')}")
+    if label == 'bad':
         if status.get('alert'):
             lines.append('Warning active')
         elif status.get('warning_remaining') is not None:
             lines.append(f"Warning in {status['warning_remaining']:.1f}s")
-        lines.extend(_wrap_overlay_text(correction, 400, 0.48, 1))
-    elif label == 'good':
-        color = (46, 160, 92)
-        lines = ['GOOD POSTURE']
-        if status.get('neck') is not None:
-            lines.append(f"Neck angle: {status['neck']:.1f} deg")
-        if status.get('tilt') is not None:
-            lines.append(f"Shoulder tilt: {status['tilt']:.1f} deg")
-        if status.get('head_offset') is not None:
-            lines.append(f"Head offset: {status['head_offset']:+.2f} shoulder widths")
-        if status.get('probability') is not None:
-            lines.append(f"Model probability: {status['probability']:.3f}")
-    else:
-        color = (108, 116, 128)
-        lines = ['Posture unavailable', correction]
+    lines.extend(_wrap_overlay_text(correction, 400, 0.48, 1))
 
     max_panel_width = min(440, width - 20)
     font_scale = 0.48 if max_panel_width >= 370 else 0.40
@@ -187,15 +223,13 @@ def draw_posture_overlay(frame, status, landmarks=None, pose_landmark_ids=None):
 
 
 class CameraWorker:
-    def __init__(self, state, camera_index=0, predictor=None, model_error='', image_predictor=None, image_model_error=''):
+    def __init__(self, state, camera_index=0, image_predictor=None,
+                 image_model_error=''):
         self.state = state
         self.camera_index = camera_index
-        self.predictor = predictor
         self.image_predictor = image_predictor
         self.image_model_available = image_predictor is not None
         self.image_model_error = image_model_error
-        self.model_available = predictor is not None
-        self.model_error = model_error
         self.lock = threading.Lock()
         self.latest_jpeg = None
         self.running = False
@@ -216,35 +250,6 @@ class CameraWorker:
         with self.lock:
             return self.latest_jpeg
 
-    def _predict_ml(self, landmarks, visibility):
-        if not self.model_available or self.predictor is None:
-            return {
-                'status': 'UNKNOWN',
-                'issue': None,
-                'confidence': None,
-                'raw_label': None,
-                'raw_category': None,
-                'rejection_reason': self.model_error or 'Posture model unavailable.',
-                'landmark_visibility': visibility,
-            }
-        try:
-            return self.predictor.predict(landmarks)
-        except Exception as exc:
-            self.model_error = f'{type(exc).__name__}: {exc}'
-            self.model_available = False
-            logging.getLogger(__name__).exception(
-                'ML posture prediction failed; switch to rules mode'
-            )
-            return {
-                'status': 'UNKNOWN',
-                'issue': None,
-                'confidence': None,
-                'raw_label': None,
-                'raw_category': None,
-                'rejection_reason': f'Model inference failed: {self.model_error}',
-                'landmark_visibility': visibility,
-            }
-
     def _predict_image(self, frame, landmarks):
         if not self.image_model_available or self.image_predictor is None:
             return {
@@ -252,11 +257,10 @@ class CameraWorker:
                 'issue': None,
                 'confidence': None,
                 'raw_label': None,
-                'raw_category': None,
                 'rejection_reason': (
                     self.image_model_error or 'Image posture model unavailable.'
                 ),
-                'landmark_visibility': {},
+                'landmark_visibility': landmark_visibility(landmarks),
             }
         try:
             return self.image_predictor.predict(frame, landmarks)
@@ -271,22 +275,37 @@ class CameraWorker:
                 'issue': None,
                 'confidence': None,
                 'raw_label': None,
-                'raw_category': None,
                 'rejection_reason': (
                     f'Image model inference failed: {self.image_model_error}'
                 ),
-                'landmark_visibility': {},
+                'landmark_visibility': landmark_visibility(landmarks),
             }
 
     def _run(self):
         cap = None
         try:
-            import mediapipe as mp
+            if cv2 is None:
+                self.error = (
+                    'OpenCV is unavailable. Install the project requirements '
+                    'in its Python 3.12 environment.'
+                )
+                return
+            try:
+                import mediapipe as mp
+            except ImportError as exc:
+                self.error = (
+                    'MediaPipe is unavailable. Install the project requirements '
+                    f'in its Python 3.12 environment. Details: {exc}'
+                )
+                return
             pose_api = mp.solutions.pose
             drawing = mp.solutions.drawing_utils
             cap = cv2.VideoCapture(self.camera_index)
             if not cap.isOpened():
-                self.error = 'Cannot open webcam. Check permissions and camera index.'
+                self.error = (
+                    f'Cannot open webcam index {self.camera_index}. Check camera '
+                    'permissions, close other camera apps, and try SMARTPOS_CAMERA=1.'
+                )
                 self.running = False
                 return
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
@@ -297,77 +316,37 @@ class CameraWorker:
                 while self.running:
                     ok, frame = cap.read()
                     if not ok:
-                        self.state.update_measurement(None, None)
+                        self.error = (
+                            f'Webcam index {self.camera_index} stopped delivering '
+                            'frames. Check the connection and permissions.'
+                        )
+                        self.state.mark_camera_failure(
+                            self.error
+                        )
                         time.sleep(.1)
                         continue
+                    self.error = ''
                     source_frame = frame
                     frame = cv2.flip(frame, 1)
                     height, width = frame.shape[:2]
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     rgb.flags.writeable = False
                     result = model.process(rgb)
-                    neck = tilt = head_offset = None
-                    prediction = None
                     pose_landmarks = (
                         result.pose_landmarks.landmark
                         if result.pose_landmarks else None
                     )
-                    visibility = {
-                        'nose': None,
-                        'left_ear': None,
-                        'right_ear': None,
-                        'left_shoulder': None,
-                        'right_shoulder': None,
-                    }
+                    settings = self.state.detector_settings()
+                    pose_points = posture_points(pose_landmarks)
                     if pose_landmarks is not None:
-                        landmarks = pose_landmarks
-                        ids = pose_api.PoseLandmark
-                        indices = {
-                            'nose': ids.NOSE,
-                            'left_ear': ids.LEFT_EAR,
-                            'right_ear': ids.RIGHT_EAR,
-                            'left_shoulder': ids.LEFT_SHOULDER,
-                            'right_shoulder': ids.RIGHT_SHOULDER,
-                        }
-                        visibility = {
-                            name: float(landmarks[index].visibility)
-                            for name, index in indices.items()
-                        }
-                        pose_points = {
-                            name: (
-                                landmarks[index].x,
-                                landmarks[index].y,
-                                landmarks[index].visibility,
-                            )
-                            for name, index in indices.items()
-                        }
-                        neck, tilt = posture_measurements(
-                            pose_points, width, height
-                        )
-                        head_offset = head_offset_ratio(pose_points)
                         drawing.draw_landmarks(frame,result.pose_landmarks,pose_api.POSE_CONNECTIONS)
-                    mode = self.state.current_mode()
-                    if mode == 'ml':
-                        prediction = self._predict_ml(pose_landmarks, visibility)
-                    elif mode == 'image':
-                        prediction = self._predict_image(
-                            source_frame, pose_landmarks
-                        )
-                    else:
-                        prediction = {
-                            'status': 'UNKNOWN',
-                            'issue': None,
-                            'confidence': None,
-                            'raw_label': None,
-                            'raw_category': None,
-                            'rejection_reason': (
-                                'ML inference is disabled in rule-based mode.'
-                            ),
-                            'landmark_visibility': visibility,
-                        }
-                    self.state.update_measurement(
-                        neck, tilt, prediction, head_offset
+                    measurements = measure_posture(
+                        pose_points, width, height, settings['view_mode']
                     )
+                    image_prediction = self._predict_image(
+                        source_frame, pose_landmarks
+                    )
+                    self.state.update_frame(measurements, image_prediction)
                     status = self.state.snapshot()
                     draw_posture_overlay(
                         frame,

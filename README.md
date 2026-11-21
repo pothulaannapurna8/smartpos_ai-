@@ -1,81 +1,95 @@
-# smartpos ai
+# SmartPos AI
 
-**Real-time posture monitoring with MediaPipe pose estimation and optional experimental posture classification.**
+SmartPos AI is a local Flask application for webcam-based posture feedback. It uses OpenCV capture, MediaPipe Pose landmarks, an explicitly calibrated geometry detector, and the project's existing binary GOOD/BAD HOG image classifier.
 
-smartpos ai is an educational Flask application that processes a local webcam with OpenCV and MediaPipe Pose, measures upper-body geometry, and provides posture feedback through a responsive browser dashboard.
+## What changed in the active detector
 
-## Features
+- **Hybrid is the default.** It uses calibrated geometry for final decisions. A reliable geometric BAD remains BAD regardless of AI output; a confident AI BAD that conflicts with geometric GOOD becomes UNKNOWN, never BAD. The binary image model's raw label/confidence remain visible in diagnostics, but the model is advisory until it has been validated on separate live webcam sessions.
+- **Rule-only** and **image-only** modes are available for testing. Image-only low-confidence predictions remain UNKNOWN. The legacy five-class posture classifier is no longer imported, loaded, selectable, or used in decisions.
+- The old five-class model, inference/training scripts, metrics, and source dataset are preserved under [`legacy/five_class_pose/`](legacy/five_class_pose/). Its historical attribution and model notes remain in that folder.
+- Frontal geometry measures head displacement relative to the shoulder midpoint, normalized horizontal head shift, head/shoulder image-plane alignment, shoulder tilt, and optional torso lean when hips are visible. Side-profile mode uses the visible profile shoulder/head and, when available, hip landmarks to measure image-plane alignment and torso lean.
+- Apply the five-second upright calibration before relying on rule/hybrid status. The baseline is view-specific; changing frontal/side view clears it and requires recalibration. Missing/low-visibility required landmarks immediately produce UNKNOWN. GOOD/BAD transitions are smoothed, with wider recovery hysteresis for BAD results.
+- Frontal 2-D landmarks cannot establish forward/backward depth. Use **Side profile** for visible screen-plane evidence; the app does not infer a physical neck angle or use MediaPipe's uncertain frontal depth coordinate as a certainty.
+- The dashboard shows rule status/reason, binary AI label/confidence/reason, final prediction/reason, landmark visibility, head shift, image-plane alignment, shoulder tilt, optional torso lean, calibration, alerts and session score.
 
-- Webcam MJPEG stream with MediaPipe landmark overlay
-- Head-to-vertical neck alignment angle measured at the shoulder midpoint (no hip landmarks required)
-- Shoulder tilt and normalized head-to-shoulder-center offset
-- Configurable good/bad/unknown posture rules and delayed visual alerts
-- Optional five-class scikit-learn pose mode and binary HOG image mode; rule-based detection remains the default
-- ML posture category and general ergonomic suggestions, separate from geometric measurements
-- Live prediction diagnostics for raw class, probability, final status, rejection reason and landmark visibility
-- Delayed visual/beep warning with optional spoken correction
-- Session start, pause, stop and reset
-- Time-weighted posture score excluding missing-landmark intervals
-- Five-second upright calibration using medians, with accept/reject
-- Settings validation, responsive dark dashboard and optional browser beep
+## Root causes identified in the previous source
 
-## Technologies and architecture
+1. The previous geometry used only 2-D head/shoulder positions. A frontal camera cannot see a forward lean that moves mainly along the camera's depth axis, so the posture can remain GOOD without any measurable 2-D change.
+2. Sideways posture depended on one normalized horizontal head-offset threshold and a zero baseline unless calibration had been manually accepted. The old offset denominator also included the shoulder line's vertical component, which could reduce the reported horizontal offset when shoulders tilted. The previous pipeline did not require a valid calibrated baseline before returning GOOD.
+3. The old five-class model was loaded automatically at startup even though geometry was the default; its labels and APIs were still present in dashboard mode selection and inference branches.
+4. The saved binary image model's preprocessing and class mapping were internally consistent: BGR input, grayscale conversion, 64×64 full-frame resize, histogram equalization, 1,764 HOG features, class `0 = BAD`, class `1 = GOOD`. Live inference used the original unmirrored BGR camera frame just as training used `cv2.imread`; no crop is applied in either path. This verifies preprocessing parity, **not** webcam accuracy. If live predictions differ, domain shift remains possible and must be measured with the validation utility rather than assumed.
 
-`Webcam → OpenCV capture → MediaPipe Pose inference → landmark visibility checks → geometric measurements → (rule-based detection or one explicitly selected experimental classifier) → Flask JSON/MJPEG endpoints → HTML/CSS/JavaScript dashboard`
+## Setup and start (Windows PowerShell)
 
-The Flask process loads the optional models at startup and owns one background camera worker and a thread-safe session state. `/api/status` supplies geometric values, selected result, recent posture transitions and session warning count; `/api/mode` switches between rule-based, five-class pose, and binary image detection; `/api/session`, `/api/calibration` and `/api/settings` accept dashboard actions; `/video_feed` streams locally generated JPEG frames with posture overlays. Browser JavaScript polls status and plays an optional Web Audio beep when a warning first appears. The session score uses the selected detector's GOOD/BAD durations; model probability is displayed separately, is not calibrated, and is not the score.
-
-**Model explanation:** MediaPipe Pose uses pretrained deep-learning models to infer body landmarks. The optional five-class posture classifier is a supplied scikit-learn `MLPClassifier` trained on MultiPosture data; the separately trained GOOD/BAD model uses HOG image features and logistic regression. The five-class artifact's participant-held-out offline accuracy is **57.04%** (balanced accuracy **56.40%**). The binary image model's 44-image, grouped same-session evaluation is reported in [IMAGE_MODEL_README.md](IMAGE_MODEL_README.md), including per-class metrics. These offline figures are not directly comparable because their data and split strategies differ; neither is verified real-world webcam accuracy, and the reported probabilities are not calibrated safety confidence. Pose-ML directional outputs are conservatively checked against independent geometry: an unsupported forward/backward guess is shown as UNKNOWN, and supported depth-oriented labels are reduced to generic head-alignment feedback because frontal 2-D geometry cannot verify depth. The rule-based mode remains the default. This project is an educational demonstration, **not medical advice**.
-
-| Mode | Evidence and selection strategy |
-|---|---|
-| Rule-based (default) | Uses measured neck alignment, shoulder tilt and normalized head-center offset. Missing/low-visibility landmarks remain UNKNOWN. No trained-model accuracy is claimed. |
-| Experimental pose ML | Uses the five-class landmark model (57.04% participant-held-out offline accuracy). Model labels are not fused blindly: upright must agree with GOOD geometry, lateral labels need a matching head offset, and forward/backward labels need a measurable alignment deviation but are reported only as generic head alignment. |
-| Experimental image | Uses the binary GOOD/BAD HOG model (86.36% on its small grouped same-session split; per-class results in [IMAGE_MODEL_README.md](IMAGE_MODEL_README.md)). Requires a visible head and both shoulders; it cannot identify a specific posture issue. |
-
-The two offline model scores have different datasets and split designs and must not be used as a head-to-head comparison or webcam accuracy claim.
-
-## Run on Windows (PowerShell)
-
-Use **Python 3.12**. From the project directory:
+Use Python 3.12. Run these commands from the directory containing `app.py`:
 
 ```powershell
-cd smartpos-ai
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe app.py
 ```
 
-Open http://127.0.0.1:5000 in your browser and allow Windows camera access. The default camera is index 0. To select the environment in VS Code, run **Python: Select Interpreter** and choose `.\.venv\Scripts\python.exe`.
-
-To use another webcam in PowerShell:
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and allow camera access. The default webcam index is `0`. For another camera, stop the app, then run:
 
 ```powershell
 $env:SMARTPOS_CAMERA="1"
 .\.venv\Scripts\python.exe app.py
 ```
 
-On Linux/macOS use `python3.12 -m venv .venv`, `source .venv/bin/activate`, then `pip install -r requirements.txt` and `python app.py`.
+For Linux/macOS, create a Python 3.12 virtual environment, install `requirements.txt`, and run `python app.py`. The server binds to localhost only.
 
-## How to demonstrate
+## First use and manual webcam checks
 
-1. Face the webcam with your **head and both shoulders visible**. Hips are not required; MediaPipe uses visible ears (or nose fallback) plus both shoulders.
-2. Click **Start / Resume** and hold your head approximately over your shoulders to see the good classification.
-3. Safely move your head forward/sideways or tilt your shoulders to see the bad classification and warning after the configured delay.
-4. Pause, resume, stop and reset the session; verify elapsed, good/bad tracked time and score.
-5. Hold an upright pose and click **Calibrate · 5 sec**. Review the suggested thresholds and try both **Apply thresholds** and **Reject**.
-6. Adjust a valid threshold and click **Save settings**. Move out of frame to observe the unknown/missing-landmark state.
-7. Optionally select **Experimental ML model** to see a model label, five-class category and general ergonomic suggestion. Switch back to **Rule-based** for geometric classification. If required model landmarks are absent or probability is below threshold, ML mode reports UNKNOWN.
-8. Use **Posture history** and the warning count while the session is running; warning sounds trigger once per sustained warning episode, not once per frame.
+1. Choose **Frontal** view when facing the camera, or **Side profile** when the camera sees your profile.
+2. Keep the required head and shoulder landmarks visible. Click **Calibrate · 5 sec** while sitting comfortably upright; apply the proposed baseline. If calibration reports too few samples, improve lighting/framing and try again.
+3. Start a session and check that upright posture becomes GOOD after the stable-frame delay. The score counts only final GOOD/BAD time; UNKNOWN intervals are excluded.
+4. In frontal view, gently shift your head left/right or raise one shoulder to test measurable geometry. Do not expect frontal 2-D geometry to identify a pure forward/backward depth movement.
+5. To test forward movement, select **Side profile**, recalibrate in that view, then make a small comfortable forward head/torso movement. If landmarks do not support the measurement, UNKNOWN is intentional.
+6. Compare the independent AI and rule predictions in **Live detector diagnostics**. Use **Image-only (testing)** to observe the binary model. Its probability is uncalibrated and its offline score is not live webcam accuracy.
+7. Test pause/resume/stop/reset, score, warning delay, visual/beep warning, and optional spoken correction. Adjust limits under **Sensitivity settings** if necessary.
 
-## Default thresholds
+To try a different camera index, close the app first and set `SMARTPOS_CAMERA` as shown above. If the webcam cannot be opened, the connection banner and `/api/status` report the problem.
 
-- Neck minimum: **150°** (lower is classified as bad)
-- Shoulder tilt maximum: **10°** (higher is classified as bad)
-- Head-center offset maximum: **0.18 shoulder widths** from the calibrated neutral center
-- Alert delay: **3 seconds**
+## Consent-based webcam validation
 
-The neck value is the angle between the head-to-shoulder line and a vertical-down reference at the shoulder midpoint; upright alignment is near 180°. It and the shoulder/head-center measurements are image-space approximations, not medical measurements. The frontal-view geometry can identify visible shoulder tilt and head offset, but cannot reliably infer forward/backward depth displacement or diagnose neck angles. Decisions require eight stable frames; the rule-based detector also uses narrow exit hysteresis to reduce threshold flicker. Calibration uses median neck angle minus 10°, median shoulder tilt plus 5°, and the observed neutral head-center offset. These are heuristics, not clinical thresholds.
+The local utility stores user-approved images under `webcam-validation/`, which is git-ignored. Nothing is uploaded. Ask permission from anyone visible, run it interactively, and type `YES` at the consent prompt:
+
+```powershell
+.\.venv\Scripts\python.exe webcam_validation.py collect --view frontal
+```
+
+In the capture window, hold one comfortable pose and press:
+
+| Key | Label |
+|---|---|
+| `g` | `GOOD_UPRIGHT` |
+| `f` | `BAD_FORWARD` |
+| `l` | `BAD_LEFT` |
+| `r` | `BAD_RIGHT` |
+| `t` | `BAD_SHOULDER_TILT` |
+| `q` | Quit |
+
+Each label key saves a short 12-frame burst to a new session. Run collection again to create a different session. Do not deliberately hold an uncomfortable posture.
+
+For a rule/hybrid evaluation, first collect a **calibration-only session** containing only `GOOD_UPRIGHT`, note its printed session ID, and then collect separate evaluation sessions. Evaluate them with:
+
+```powershell
+.\.venv\Scripts\python.exe webcam_validation.py evaluate --mode hybrid --calibration-session SESSION_ID
+```
+
+Use `--mode rules` or `--mode image` to evaluate either detector alone. Calibration sessions are excluded from evaluation; each burst is summarized as one prediction after stable smoothing. The JSON report includes a GOOD/BAD-by-GOOD/BAD/UNKNOWN confusion matrix, GOOD/BAD precision and recall, balanced accuracy, per-posture BAD recall, UNKNOWN rate, and the evaluation/calibration session IDs. Missing classes have `null` recall rather than an invented value. The utility never trains or retrains a model. Keep evaluation sessions separate from any future training data; correlated frames in a burst are not independent samples. Review the report and collect additional sessions across people, cameras, and lighting before making any accuracy claim.
+
+Do not claim 80%+ live accuracy without sufficient, independently labeled measurement. No webcam validation was performed as part of this source change.
+
+## Binary image model verification and limits
+
+The active artifact is [`image_posture_model.joblib`](image_posture_model.joblib). The checked bundle has feature kind `hog_image_binary_v1`, classes `[0, 1]`, and 1,764 input features; inference validates these facts at load. Training and inference share the same preprocessing function in [`smartpos/image_features.py`](smartpos/image_features.py). Inference keeps both the raw class and confidence when the confidence threshold rejects a result. The model requires a visible head and both shoulders.
+
+The existing offline grouped evaluation used 44 images from the same-session dataset split: 86.36% accuracy/balanced accuracy, BAD recall 1.00, and GOOD recall 0.727. The model was then refit on 123 images. This small, grouped same-session evaluation does **not** establish independent-person, webcam, or medical accuracy. Its probabilities are not calibrated. Do not retrain this model until baseline webcam sessions have been collected and the failure cause is understood.
+
+The image model labels only GOOD/BAD; it cannot explain a lean direction. Hybrid mode does not let its unvalidated BAD/GOOD predictions override geometry. A confident image prediction is diagnostic evidence only until new live-session validation has been reviewed; a confident AI BAD conflicting with geometric GOOD produces UNKNOWN.
+
+The source dataset's existing attribution and license notes remain in [`IMAGE_MODEL_README.md`](IMAGE_MODEL_README.md). Preserve them if redistributing the model or training code.
 
 ## Tests
 
@@ -83,54 +97,19 @@ The neck value is the angle between the head-to-shoulder line and a vertical-dow
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Tests cover geometry, head/shoulder measurements with partial-body visibility, missing landmarks, sideways and shoulder-tilt rules, model label/probability mapping, image-model loading, rule/ML/image mode separation, score arithmetic, calibration acceptance/rejection and expiry, session start/stop/reset, warning counting, model-loading fallback, overlays and Flask routes/input validation. The reported offline metrics are not a live accuracy guarantee.
-
-## Project layout
-
-```text
-smartpos-ai/
-├── app.py                 Flask app and JSON/video endpoints
-├── smartpos/
-│   ├── camera.py          Webcam + MediaPipe inference worker
-│   ├── geometry.py        Independent geometry/score helpers
-│   └── state.py           Session, alerts, calibration state
-├── templates/index.html  Dashboard markup
-├── static/styles.css     Dashboard appearance
-├── static/app.js         Live polling and controls
-├── tests/test_geometry.py
-├── posture_model.joblib  Experimental trained classifier
-├── posture_inference.py  Feature extraction and prediction adapter
-├── image_posture_model.joblib  Experimental GOOD/BAD image classifier
-├── image_posture_inference.py  Image feature prediction adapter
-├── train_model.py        Reproducible, subject-separated training
-├── train_image_posture.py  Image model training/evaluation
-├── metrics.json          Held-out-subject evaluation metrics
-├── README_MODEL.md       Model details and limitations
-├── requirements.txt
-├── README.md
-└── SETUP_GUIDE.md
-```
+Tests cover frontal/side geometry, calibrated baseline decisions, hysteresis, immediate UNKNOWN on missing landmarks, hybrid policy, model schema/labels/preprocessing, API mode and settings validation, overlays, and webcam-validation metrics.
 
 ## Troubleshooting
 
-- **Camera unavailable:** close Zoom/Teams, check camera permissions, try `SMARTPOS_CAMERA=1`.
-- **UNKNOWN or missing angles:** keep your head and both shoulders visible; hips are not needed. Use even lighting and face the camera.
-- **ML unavailable:** check `/api/status` for `model_error`, keep the model file beside `app.py`, and use the pinned scikit-learn requirement. Rule-based mode remains available if model loading fails.
-- **Pose ML shows UNKNOWN:** it requires visible nose, both ears and both shoulders with sufficient visibility and a probability of at least 0.55.
-- **Image model shows UNKNOWN:** its maximum binary class probability is below 0.65, the model failed, or no usable camera frame is available.
-- **MediaPipe import fails:** use Python 3.12 and reinstall requirements in the project virtual environment. `mediapipe==0.10.14` includes a Windows CPython 3.12 wheel.
-- **Dependency download/hash error:** retry on a stable network and use a fresh virtual environment. Do not disable package integrity checks.
-- **Score stays at zero:** click Start and keep the required landmarks visible.
-- **Alerts are too sensitive:** use calibration or change thresholds. Browser sound requires browser audio support and may require user interaction; the visual warning remains available.
+- **Missing Python dependencies:** activate/use the project's Python 3.12 environment and reinstall `requirements.txt`. Startup reports a missing Flask/OpenCV/MediaPipe dependency with installation guidance when possible.
+- **Camera unavailable or wrong index:** check OS camera permissions, close applications using the webcam, and retry with `$env:SMARTPOS_CAMERA="1"` (or another non-negative index). A bad `SMARTPOS_CAMERA` value is reported rather than silently selected.
+- **UNKNOWN / calibration failed:** confirm the selected frontal/side view, improve lighting, keep the head and required shoulder landmarks visible, and collect at least 10 reliable calibration samples. UNKNOWN is preferable to a fabricated measurement.
+- **Forward lean remains GOOD in frontal view:** pure depth movement is not measurable from frontal 2-D landmarks. Change to **Side profile**, recalibrate, and test again; if the head/torso shift is not visible, status remains UNKNOWN.
+- **Binary model missing or corrupt:** `/api/status` reports `image_model_error`; hybrid/rule mode remains available, but image-only mode is disabled.
+- **Image model appears wrong:** verify the diagnostic confidence and compare it with rules. Preprocessing matches training; poor live behavior can be domain shift. Collect independent labeled webcam sessions and inspect the report rather than changing the model or claiming accuracy.
+- **Score stays at zero:** click Start/Resume and wait for a stable GOOD/BAD result. UNKNOWN time, paused time, and stale camera frames are excluded.
+- **Alerts feel too sensitive:** apply a clean upright baseline, adjust the geometric thresholds, and change alert delay. Image confidence is not a safety confidence.
+- **MediaPipe import or inference error:** check the reported camera error and reinstall the pinned project requirements in Python 3.12. OpenCV/MediaPipe must use the same environment as Flask.
+- **Browser audio unavailable:** allow browser audio or interact with the page; visual warnings remain available.
 
-## Limitations and privacy
-
-Single-user local-only demo. Measurements and model classifications depend on camera angle, clothing, landmark visibility and lighting. Front-facing 2-D shoulder/head geometry does not reliably measure depth-oriented leaning. The five-class model has modest held-out accuracy; the image model has only a small same-session evaluation, and neither has verified live-camera accuracy. The supplied 123-image source dataset is not included, so near-duplicate images cannot be independently audited from this workspace; the training script groups timestamped adjacent frames, but this does not establish independent-person validation. The session data is in memory and is lost when the process exits. No recordings, cloud uploads, account system or persistent database are included. The server binds to `127.0.0.1` and has no authentication; do not expose it to an untrusted network.
-
-## Reference and development note
-
-Functionality was informed by the public [Posture-Detection-ComputerVision reference project](https://github.com/MuhammadIshaq-AI/Posture-Detection-ComputerVision). This codebase was written separately rather than copied from that repository. The posture classifier was trained from the supplied MultiPosture data; consult the dataset terms before redistribution. MediaPipe, OpenCV, Flask, NumPy, scikit-learn, joblib and their transitive packages are external dependencies governed by their respective licenses. AI assistance was used during development; review and follow your institution's AI-use and attribution requirements.
-
-## Publishing to GitHub
-
-The project directory can be initialized as a new repository after review. Create an empty repository named `smartpos-ai` on GitHub, then follow the commands in [SETUP_GUIDE.md](SETUP_GUIDE.md). Do not push credentials or the `.venv` directory.
+Camera frames are processed locally and are not recorded by the dashboard. The validation utility records only after explicit local consent and stores its files in the ignored `webcam-validation/` folder. This is an educational project, not medical advice or a diagnosis.

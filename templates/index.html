@@ -1,17 +1,131 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>smartpos ai | Posture Intelligence</title><link rel="stylesheet" href="/static/styles.css"></head>
-<body><div class="shell">
-<header><div class="brand"><span class="brand-icon">◉</span><div><h1>smartpos <em>ai</em></h1><p>REAL-TIME POSTURE INTELLIGENCE</p></div></div><div class="live"><span class="pulse"></span><span id="connection">Connecting to camera…</span></div></header>
-<main><section class="maincol"><div class="panel video-panel"><div class="panel-title"><span>LIVE CAMERA</span><span class="hint">MediaPipe pose tracking</span></div><div class="video-wrap"><img src="/video_feed" alt="Live webcam with pose overlay"><div class="video-caption">LOCAL PROCESSING · NO VIDEO UPLOAD</div></div><div class="status-row"><div><div class="eyebrow">CURRENT POSTURE</div><div id="posture" class="posture unknown">Waiting for camera</div><div id="posture-category" class="helper">Rule-based geometric result</div></div><div id="alert" class="alert-chip" role="status" aria-live="polite">No alert</div></div><p id="ergonomic-advice" class="helper" aria-live="polite">Keep your head and both shoulders visible.</p><label class="voice-toggle"><input id="voice-alert" type="checkbox"> Speak correction when a warning triggers</label></div>
-<div class="panel"><div class="panel-title">DETECTION MODE</div><label for="detection-mode">Posture classifier <select id="detection-mode"><option value="rules">Rule-based (default)</option><option id="ml-mode" value="ml">Experimental pose ML model</option><option id="image-mode" value="image">Experimental image classifier</option></select></label><div id="model-info" class="helper">Rule-based geometry is the default. Experimental model probabilities are not calibrated and have no verified webcam accuracy.</div></div>
-<details class="panel diagnostics"><summary>Live prediction diagnostics</summary><dl><dt>Active mode</dt><dd id="debug-mode">—</dd><dt>Raw ML prediction</dt><dd id="debug-raw">—</dd><dt>Model probability</dt><dd id="debug-probability">—</dd><dt>Final status</dt><dd id="debug-status">—</dd><dt>Rejection / note</dt><dd id="debug-reason">—</dd><dt>Landmark visibility</dt><dd id="debug-visibility">—</dd></dl></details>
-<div class="panel"><div class="panel-title">SESSION CONTROLS</div><div class="button-row"><button data-session="start" class="primary">Start / Resume</button><button data-session="pause">Pause</button><button data-session="stop">Stop</button><button data-session="reset">Reset</button></div><div id="session-mode" class="helper">Session idle</div><div class="helper">Session score uses the selected detector's GOOD/BAD time; ML probability is not the score.</div></div></section>
-<aside><div class="stats"><div class="panel stat"><div class="eyebrow">POSTURE SCORE</div><div class="big" id="score">0%</div><div class="helper">Good time / valid tracked time</div></div><div class="panel stat"><div class="eyebrow">SESSION TIME</div><div class="big" id="elapsed">00:00:00</div><div class="helper"><span id="good">0s</span> good · <span id="bad">0s</span> bad</div></div></div>
-<div class="stats"><div class="panel stat"><div class="eyebrow">NECK ALIGNMENT ANGLE</div><div class="metric" id="neck">—</div><div class="helper">Minimum <span id="neck-target">150</span>°</div></div><div class="panel stat"><div class="eyebrow">SHOULDER TILT</div><div class="metric" id="tilt">—</div><div class="helper">Maximum <span id="tilt-target">10</span>°</div></div></div>
-<div class="stats"><div class="panel stat"><div class="eyebrow">HEAD CENTER OFFSET</div><div class="metric" id="head-offset">—</div><div class="helper">Normalized by shoulder width</div></div><div class="panel stat"><div class="eyebrow">WARNING COUNT</div><div class="metric" id="warning-count">0</div><div class="helper">Session warning episodes</div></div></div>
-<div class="panel"><div class="panel-title">POSTURE HISTORY</div><ol id="history-list" class="history-list"><li class="helper">No posture transitions yet.</li></ol></div>
-<div class="panel"><div class="panel-title">PERSONAL CALIBRATION</div><p class="helper">Sit upright with your head and both shoulders visible, then hold still for five seconds. Hips are not required.</p><div class="button-row"><button id="calibrate" class="primary">Calibrate · 5 sec</button><button id="cancel-cal">Cancel</button></div><div id="cal-message" class="helper">Calibration not started</div><div id="cal-offer" hidden><p id="cal-values"></p><div class="button-row"><button id="accept-cal" class="primary">Apply thresholds</button><button id="reject-cal">Reject</button></div></div></div>
-<div class="panel"><div class="panel-title">SENSITIVITY SETTINGS</div><form id="settings"><label>Neck minimum <input name="neck_min" type="number" min="90" max="179" step="1" value="150"></label><label>Shoulder tilt maximum <input name="tilt_max" type="number" min="1" max="45" step="1" value="10"></label><label>Head center offset (shoulder widths) <input name="head_offset_max" type="number" min="0.05" max="0.5" step="0.01" value="0.18"></label><label>Alert delay (seconds) <input name="alert_delay" type="number" min="1" max="20" step="1" value="3"></label><button class="primary" type="submit">Save settings</button></form></div>
-</aside></main><footer>smartpos ai · Educational demonstration · Not a medical diagnosis tool · Camera frames remain on this computer</footer><div id="toast" role="status" aria-live="polite"></div></div>
-<script src="/static/app.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SmartPos AI | Posture Monitor</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand">
+      <span class="brand-icon">◉</span>
+      <div><h1>smartpos <em>ai</em></h1><p>LOCAL WEBCAM POSTURE MONITOR</p></div>
+    </div>
+    <div class="live"><span class="pulse"></span><span id="connection">Connecting to camera…</span></div>
+  </header>
+  <main>
+    <section class="maincol">
+      <div class="panel video-panel">
+        <div class="panel-title"><span>LIVE CAMERA</span><span class="hint">OpenCV · MediaPipe Pose</span></div>
+        <div class="video-wrap">
+          <img src="/video_feed" alt="Live webcam with posture overlay">
+          <div class="video-caption">LOCAL PROCESSING · NO VIDEO UPLOAD</div>
+        </div>
+        <div class="status-row">
+          <div>
+            <div class="eyebrow">CURRENT POSTURE</div>
+            <div id="posture" class="posture unknown">Waiting for camera</div>
+            <div id="posture-category" class="helper">Waiting for reliable measurements</div>
+          </div>
+          <div id="alert" class="alert-chip" role="status" aria-live="polite">No alert</div>
+        </div>
+        <p id="ergonomic-advice" class="helper" aria-live="polite">Keep the required head and shoulder landmarks visible.</p>
+        <label class="voice-toggle"><input id="voice-alert" type="checkbox"> Speak correction when a warning triggers</label>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">DETECTION MODE</div>
+        <label for="detection-mode">Posture detector
+          <select id="detection-mode">
+            <option value="hybrid">Hybrid (default)</option>
+            <option value="rules">Rule-only</option>
+            <option id="image-mode" value="image">Image-only (testing)</option>
+          </select>
+        </label>
+        <div id="model-info" class="helper">Hybrid uses calibrated geometry for the final status. The unvalidated image-model result is diagnostic only.</div>
+      </div>
+
+      <details class="panel diagnostics">
+        <summary>Live detector diagnostics</summary>
+        <dl>
+          <dt>Active mode / view</dt><dd id="debug-mode">—</dd>
+          <dt>Rule-based prediction</dt><dd id="debug-rule">—</dd>
+          <dt>Rule reason</dt><dd id="debug-rule-reason">—</dd>
+          <dt>Binary AI prediction</dt><dd id="debug-image">—</dd>
+          <dt>AI confidence (uncalibrated)</dt><dd id="debug-confidence">—</dd>
+          <dt>AI reason</dt><dd id="debug-image-reason">—</dd>
+          <dt>Vertical head displacement</dt><dd id="debug-head-vertical">—</dd>
+          <dt>Final prediction</dt><dd id="debug-status">—</dd>
+          <dt>Final decision reason</dt><dd id="debug-reason">—</dd>
+          <dt>Landmark visibility</dt><dd id="debug-visibility">—</dd>
+        </dl>
+      </details>
+
+      <div class="panel">
+        <div class="panel-title">SESSION CONTROLS</div>
+        <div class="button-row">
+          <button data-session="start" class="primary">Start / Resume</button>
+          <button data-session="pause">Pause</button>
+          <button data-session="stop">Stop</button>
+          <button data-session="reset">Reset</button>
+        </div>
+        <div id="session-mode" class="helper">Session idle</div>
+        <div class="helper">Session score counts only final GOOD/BAD time; UNKNOWN intervals are excluded.</div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="stats">
+        <div class="panel stat"><div class="eyebrow">POSTURE SCORE</div><div class="big" id="score">0%</div><div class="helper">Good time / valid tracked time</div></div>
+        <div class="panel stat"><div class="eyebrow">SESSION TIME</div><div class="big" id="elapsed">00:00:00</div><div class="helper"><span id="good">0s</span> good · <span id="bad">0s</span> bad</div></div>
+      </div>
+      <div class="stats">
+        <div class="panel stat"><div class="eyebrow">HEAD / SHOULDER DEVIATION</div><div class="metric" id="alignment">—</div><div class="helper">Image-plane measurement vs. calibrated baseline; not a physical neck angle</div></div>
+        <div class="panel stat"><div class="eyebrow">SHOULDER TILT</div><div class="metric" id="tilt">—</div><div class="helper">Image-plane angle</div></div>
+      </div>
+      <div class="stats">
+        <div class="panel stat"><div class="eyebrow">HEAD SHIFT</div><div class="metric" id="head-offset">—</div><div class="helper" id="head-offset-unit">Normalized by shoulder width</div></div>
+        <div class="panel stat"><div class="eyebrow">WARNING COUNT</div><div class="metric" id="warning-count">0</div><div class="helper">Session warning episodes</div></div>
+      </div>
+      <div class="panel stat"><div class="eyebrow">TORSO LEAN</div><div class="metric" id="torso-lean">—</div><div class="helper">Available only when hip landmarks are visible</div></div>
+
+      <div class="panel">
+        <div class="panel-title">POSTURE HISTORY</div>
+        <ol id="history-list" class="history-list"><li class="helper">No posture transitions yet.</li></ol>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">PERSONAL CALIBRATION</div>
+        <p class="helper">Select frontal or side view first. Hold a comfortable upright position with the required landmarks visible for five seconds, then review and apply the baseline.</p>
+        <div class="button-row"><button id="calibrate" class="primary">Calibrate · 5 sec</button><button id="cancel-cal">Cancel</button></div>
+        <div id="cal-message" class="helper">Calibration not started</div>
+        <div id="cal-offer" hidden><p id="cal-values"></p><div class="button-row"><button id="accept-cal" class="primary">Apply baseline</button><button id="reject-cal">Reject</button></div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">SENSITIVITY SETTINGS</div>
+        <form id="settings">
+          <label>Camera view
+            <select name="view_mode">
+              <option value="frontal">Frontal</option>
+              <option value="side">Side profile</option>
+            </select>
+          </label>
+          <label>Head shift limit <input name="head_offset_max" type="number" min="0.05" max="0.5" step="0.01" value="0.18"></label>
+          <label>Alignment deviation limit <input name="alignment_max" type="number" min="3" max="45" step="1" value="16"></label>
+          <label>Shoulder tilt limit <input name="tilt_max" type="number" min="1" max="45" step="1" value="10"></label>
+          <label>Torso lean limit <input name="torso_lean_max" type="number" min="3" max="45" step="1" value="16"></label>
+          <label>Alert delay (seconds) <input name="alert_delay" type="number" min="1" max="20" step="1" value="3"></label>
+          <button class="primary" type="submit">Save settings</button>
+        </form>
+      </div>
+    </aside>
+  </main>
+  <footer>SmartPos AI · Educational demonstration · Not a medical diagnosis · Camera frames remain on this computer</footer>
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

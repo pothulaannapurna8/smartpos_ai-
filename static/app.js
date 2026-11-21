@@ -1,18 +1,10 @@
 'use strict';
 const el = id => document.getElementById(id);
 let lastSettings = '';
-let lastCal = '';
+let lastCalibration = '';
 let lastAlert = false;
 let voiceUnavailableShown = false;
 let audioContext;
-
-const advice = {
-  UPRIGHT: 'Your detected pose is near upright. Vary your posture and take regular movement breaks.',
-  LEAN_FORWARD: 'Move your head back over your shoulders and sit comfortably upright.',
-  LEAN_BACKWARD: 'Return gently to a supported, comfortable position; keep the screen near eye level.',
-  LEAN_LEFT: 'Center your head and shoulders comfortably; adjust the screen or chair if needed.',
-  LEAN_RIGHT: 'Center your head and shoulders comfortably; adjust the screen or chair if needed.'
-};
 
 function duration(seconds) {
   const n = Math.floor(seconds);
@@ -75,49 +67,117 @@ function speakCorrection(text) {
 }
 
 function renderPosture(data) {
-  const prediction = data.ml_prediction || {};
   const category = data.issue;
   const statusText = {good: 'GOOD', bad: 'BAD', unknown: 'UNKNOWN'};
   el('posture').textContent = statusText[data.label] || 'UNKNOWN';
   el('posture').className = 'posture ' + (data.label || 'unknown');
-
-  if (category) {
-    const probability = ['ml', 'image'].includes(data.mode) && data.probability != null
-      ? ` · uncalibrated model probability ${Number(data.probability).toFixed(3)}`
-      : '';
-    el('posture-category').textContent = `${category}${probability}`;
-  } else {
-    el('posture-category').textContent = 'No reliable posture category';
-  }
-
-  const correction = data.correction || (
-    data.label === 'bad'
-      ? advice[category] || 'Gently align your head over your shoulders and keep both shoulders comfortably level.'
-      : data.label === 'good'
-        ? advice.UPRIGHT
-        : 'Move into view so the required landmarks can be evaluated.'
-  );
-  el('ergonomic-advice').textContent = correction;
-  return correction;
+  el('posture-category').textContent = category
+    ? `${category} · ${data.mode} mode`
+    : 'No reliable posture category';
+  el('ergonomic-advice').textContent = data.correction ||
+    'Move into view so the required landmarks can be evaluated.';
+  return data.correction || '';
 }
 
 function renderDiagnostics(data) {
   const debug = data.debug || {};
-  const raw = debug.raw_ml_prediction
-    ? `${debug.raw_ml_prediction}${debug.raw_posture_category ? ` · ${debug.raw_posture_category}` : ''}`
-    : 'Not available';
   const visibility = debug.landmark_visibility || {};
-  el('debug-mode').textContent = debug.active_mode || data.mode || '—';
-  el('debug-raw').textContent = raw;
-  el('debug-probability').textContent = debug.model_probability == null
+  const confidence = debug.image_confidence;
+  el('debug-mode').textContent =
+    `${debug.active_mode || data.mode || '—'} · ${debug.view_mode || data.view_mode || '—'}`;
+  el('debug-rule').textContent = debug.rule_prediction || 'UNKNOWN';
+  el('debug-rule-reason').textContent = debug.rule_reason || '—';
+  el('debug-image').textContent = debug.image_prediction || 'UNKNOWN';
+  el('debug-confidence').textContent = confidence == null
     ? '—'
-    : debug.model_probability.toPrecision(9);
-  el('debug-status').textContent = debug.final_status || String(data.label || 'unknown').toUpperCase();
-  el('debug-reason').textContent = debug.rejection_reason || '—';
+    : Number(confidence).toFixed(3);
+  el('debug-image-reason').textContent = debug.image_reason || '—';
+  const vertical = data.metrics?.head_vertical_displacement;
+  const verticalUnit = data.metrics?.head_offset_unit || 'normalized units';
+  el('debug-head-vertical').textContent = vertical == null
+    ? '—'
+    : `${Number(vertical).toFixed(2)} ${verticalUnit}`;
+  el('debug-status').textContent =
+    debug.final_status || String(data.label || 'unknown').toUpperCase();
+  el('debug-reason').textContent = debug.final_reason || '—';
   el('debug-visibility').textContent = Object.keys(visibility).length
     ? Object.entries(visibility).map(([name, value]) =>
-      `${name}: ${value == null ? 'unavailable' : value.toPrecision(7)}`).join(' · ')
+      `${name}: ${value == null ? 'unavailable' : Number(value).toFixed(2)}`).join(' · ')
     : 'Unavailable';
+}
+
+function renderMeasurements(data) {
+  const metrics = data.metrics || {};
+  const baseline = data.baseline || {};
+  const number = value => value == null || !Number.isFinite(Number(value))
+    ? null
+    : Number(value);
+  const alignment = number(metrics.head_alignment_deg);
+  const alignmentBaseline = number(baseline.head_alignment_deg);
+  el('alignment').textContent = alignment == null || alignmentBaseline == null
+    ? '—'
+    : `Δ ${(alignment - alignmentBaseline >= 0 ? '+' : '')}${(alignment - alignmentBaseline).toFixed(1)}°`;
+
+  const tilt = number(metrics.shoulder_tilt_deg);
+  const signedTilt = number(metrics.shoulder_tilt_signed_deg);
+  const tiltBaseline = number(baseline.shoulder_tilt_signed_deg);
+  el('tilt').textContent = tilt == null
+    ? '—'
+    : `${tilt.toFixed(1)}°${signedTilt != null && tiltBaseline != null
+      ? ` · Δ ${(signedTilt - tiltBaseline >= 0 ? '+' : '')}${(signedTilt - tiltBaseline).toFixed(1)}°`
+      : ''}`;
+
+  const offset = number(metrics.head_offset);
+  const offsetBaseline = number(baseline.head_offset);
+  el('head-offset').textContent = offset == null
+    ? '—'
+    : `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}${offsetBaseline == null
+      ? ''
+      : ` · Δ ${(offset - offsetBaseline >= 0 ? '+' : '')}${(offset - offsetBaseline).toFixed(2)}`}`;
+  el('head-offset-unit').textContent =
+    `Normalized by ${metrics.head_offset_unit || 'shoulder width'}`;
+
+  const torso = number(metrics.torso_lean_deg);
+  const torsoBaseline = number(baseline.torso_lean_deg);
+  el('torso-lean').textContent = torso == null
+    ? '—'
+    : `${torso >= 0 ? '+' : ''}${torso.toFixed(1)}°${torsoBaseline == null
+      ? ''
+      : ` · Δ ${(torso - torsoBaseline >= 0 ? '+' : '')}${(torso - torsoBaseline).toFixed(1)}°`}`;
+}
+
+function renderCalibration(data) {
+  const calibration = data.calibration || {};
+  el('cal-message').textContent = calibration.active
+    ? 'Collecting reliable upright samples…'
+    : calibration.result?.error ||
+      (calibration.result
+        ? 'Baseline ready — review the values before applying'
+        : 'Calibration not started');
+  el('cal-offer').hidden = !(calibration.result && !calibration.result.error);
+  if (calibration.result && !calibration.result.error) {
+    const values = calibration.result.baselines || {};
+    const shown = [];
+    if (values.head_offset != null) {
+      shown.push(`head shift ${Number(values.head_offset).toFixed(2)}`);
+    }
+    if (values.head_alignment_deg != null) {
+      shown.push(`image-plane alignment ${Number(values.head_alignment_deg).toFixed(1)}°`);
+    }
+    if (values.shoulder_tilt_signed_deg != null) {
+      shown.push(`shoulder tilt ${Number(values.shoulder_tilt_signed_deg).toFixed(1)}°`);
+    }
+    if (values.torso_lean_deg != null) {
+      shown.push(`torso lean ${Number(values.torso_lean_deg).toFixed(1)}°`);
+    }
+    el('cal-values').textContent =
+      `${calibration.result.samples} samples · ${calibration.result.view_mode} view · ${shown.join(' · ')}`;
+  }
+  const key = JSON.stringify(calibration.result);
+  if (key !== lastCalibration && calibration.result?.error) {
+    toast(calibration.result.error);
+  }
+  lastCalibration = key;
 }
 
 async function refresh() {
@@ -126,22 +186,22 @@ async function refresh() {
     const data = await response.json();
     el('connection').textContent = data.camera_live
       ? 'Camera connected'
-      : (data.camera_error || 'Waiting for camera');
+      : (data.camera_error || data.debug?.final_reason || 'Waiting for camera');
     const correction = renderPosture(data);
     renderDiagnostics(data);
+    renderMeasurements(data);
 
     if (document.activeElement !== el('detection-mode')) {
       el('detection-mode').value = data.mode;
     }
-    el('ml-mode').disabled = !data.model_available;
     el('image-mode').disabled = !data.image_model_available;
     el('model-info').textContent = data.mode === 'image'
-      ? 'Experimental HOG image model; a small grouped same-session evaluation is not independent-person or verified webcam accuracy.'
-      : data.mode === 'ml'
-        ? data.model_available
-          ? 'Experimental pose model · labels are geometry-checked; unsupported directional guesses become UNKNOWN. Live webcam accuracy is not established.'
-          : `Experimental pose model unavailable: ${data.model_error || 'model failed to load'}.`
-        : 'Rule-based measurements are the default and remain available independently of the optional experimental classifiers.';
+      ? 'Image-only test mode. This HOG classifier has not been validated on live webcam sessions; probabilities are uncalibrated.'
+      : data.mode === 'rules'
+        ? 'Rule-only mode. Geometry is measured in the selected image plane; frontal view cannot resolve forward/backward depth.'
+        : data.image_model_available
+          ? 'Hybrid mode uses calibrated geometry for the final status. Image AI is diagnostic only until independent live-session validation.'
+          : `Hybrid geometry is available; image model could not load: ${data.image_model_error || 'model unavailable'}.`;
 
     const warning = Boolean(data.alert);
     el('alert').textContent = warning
@@ -158,32 +218,24 @@ async function refresh() {
     }
     lastAlert = warning;
 
-    el('neck').textContent = data.neck == null ? '—' : data.neck.toFixed(1) + '°';
-    el('tilt').textContent = data.tilt == null ? '—' : data.tilt.toFixed(1) + '°';
-    el('head-offset').textContent = data.head_offset == null
-      ? '—'
-      : `${data.head_offset >= 0 ? '+' : ''}${data.head_offset.toFixed(2)}`;
-    el('score').textContent = data.session.score.toFixed(1) + '%';
+    el('score').textContent = `${Number(data.session.score).toFixed(1)}%`;
     el('elapsed').textContent = duration(data.session.elapsed);
-    el('good').textContent = Math.round(data.session.good) + 's';
-    el('bad').textContent = Math.round(data.session.bad) + 's';
-    el('session-mode').textContent = 'Session: ' + data.session.mode;
+    el('good').textContent = `${Math.round(data.session.good)}s`;
+    el('bad').textContent = `${Math.round(data.session.bad)}s`;
+    el('session-mode').textContent = `Session: ${data.session.mode}`;
     el('warning-count').textContent = data.session.warnings;
-    el('neck-target').textContent = data.settings.neck_min;
-    el('tilt-target').textContent = data.settings.tilt_max;
-    const historyList = el('history-list');
-    historyList.replaceChildren();
+    el('history-list').replaceChildren();
     if (!data.history.length) {
       const empty = document.createElement('li');
       empty.className = 'helper';
       empty.textContent = 'No posture transitions yet.';
-      historyList.append(empty);
+      el('history-list').append(empty);
     } else {
       for (const entry of data.history.slice(0, 8)) {
         const item = document.createElement('li');
         const timeLabel = new Date(entry.timestamp * 1000).toLocaleTimeString();
         item.textContent = `${timeLabel} · ${entry.label}${entry.issue ? ` — ${entry.issue}` : ''}`;
-        historyList.append(item);
+        el('history-list').append(item);
       }
     }
 
@@ -195,22 +247,7 @@ async function refresh() {
       }
       lastSettings = settings;
     }
-
-    const calibration = data.calibration;
-    el('cal-message').textContent = calibration.active
-      ? 'Collecting upright posture samples…'
-      : calibration.result?.error ||
-        (calibration.result ? 'Calibration ready — review suggested values' : 'Calibration not running');
-    el('cal-offer').hidden = !(calibration.result && !calibration.result.error);
-    if (calibration.result && !calibration.result.error) {
-      el('cal-values').textContent =
-        `Neck ≥ ${calibration.result.neck_min}°, shoulder ≤ ${calibration.result.tilt_max}°; head baseline ${Number(calibration.result.head_offset_baseline).toFixed(2)} shoulder widths (${calibration.result.samples} samples)`;
-    }
-    const calibrationKey = JSON.stringify(calibration.result);
-    if (calibrationKey !== lastCal && calibration.result?.error) {
-      toast(calibration.result.error);
-    }
-    lastCal = calibrationKey;
+    renderCalibration(data);
   } catch (error) {
     console.error('Could not refresh posture dashboard.', error);
     el('connection').textContent = 'Server unavailable';
