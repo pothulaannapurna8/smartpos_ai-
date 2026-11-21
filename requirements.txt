@@ -1,0 +1,6 @@
+Flask>=3.0,<4
+opencv-contrib-python==4.11.0.86
+mediapipe==0.10.14
+numpy>=1.26,<2
+scikit-learn==1.8.0
+joblib>=1.4,<2

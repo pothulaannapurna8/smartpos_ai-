@@ -1,0 +1,1 @@
+"""Smartpos AI application package."""
