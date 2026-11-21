@@ -1,6 +1,20 @@
 # SmartPos AI
 
+[GitHub Repository](https://github.com/pothulaannapurna8/smartpos_ai-)
+
 SmartPos AI is a local Flask application for webcam-based posture feedback. It uses OpenCV capture, MediaPipe Pose landmarks, an explicitly calibrated geometry detector, and the project's existing binary GOOD/BAD HOG image classifier.
+
+## Clone and run
+
+```powershell
+git clone https://github.com/pothulaannapurna8/smartpos_ai-.git
+cd smartpos_ai-
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
+```
+
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and allow webcam access. Camera frames are processed locally; the application does not upload webcam images.
 
 ## What changed in the active detector
 
